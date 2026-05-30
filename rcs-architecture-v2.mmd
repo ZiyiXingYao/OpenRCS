@@ -1,31 +1,76 @@
-RCS调度平台架构（最终确认版）
-==============================
+%% RCS调度平台整体架构
+%% 左：MySQL/Redis/RocketMQ | 中：核心业务层 | 右：etcd
+%% 底部：协议层 → 设备层
 
-左：中间件                 中：核心业务层（竖排6层 + 1独立服务）      右：设备
+graph LR
+    subgraph LEFT["MySQL / Redis / RocketMQ"]
+        direction TB
+        MYSQL[("MySQL<br/>业务数据")]
+        REDIS[("Redis<br/>缓存·状态·锁")]
+        ROCKETMQ[("RocketMQ<br/>异步消息")]
+    end
 
-RocketMQ     ←→  业务层：客户端 / WMS / MES / ERP
-MySQL                ↓ HTTP RESTful API
-Redis         ←→  业务接入层
-etcd                Nginx → Web Portal（客户页面）
-                             → API Gateway（第三方系统）
-                    ↓ gRPC + MQ 混用
-             ←→  任务编排层 (Java)
-                    任务编排引擎 ← 任务拆分执行服务（调用）
-                    ↓ gRPC + MQ 混用
-             ←→  任务分配层 (C++) ──┐
-                    任务分配服务      │
-                    任务分配算法 ← 调用 │  → 全局规划服务
-                    ↓ gRPC + MQ 混用 │
-             ←→  任务执行层 (C++) ──┘
-                    任务执行服务
-                    任务规划算法 ← 调用
-                    ↓ gRPC + MQ 混用
-             ←→  设备接入层
-                    AMR接入服务 ─ 协议插件1(VAD5050) / 协议插件2(大物流协议)
-                    电梯接入服务 ─ 协议插件1(三菱) / 协议插件2(日立)
-                    门禁接入服务 ─ 协议插件1(海康) / 协议插件2(大华)
-                    ↓
-                    AMR / 电梯 / 门禁
+    subgraph CENTER["核心业务层"]
+        direction TB
+        BIZ["业务层<br/>客户端 · WMS · MES · ERP"]
+        
+        ACC["业务接入层<br/>Nginx → Web Portal · API Gateway"]
+        
+        ORC["任务编排层 (Java)<br/>任务编排引擎 ← 任务拆分执行服务"]
+        
+        ALL["任务分配层 (C++)<br/>任务分配服务 → 任务分配算法"]
+        
+        EXE["任务执行层 (C++)<br/>任务执行服务 → 路径规划算法"]
+        
+        DEV["设备接入层<br/>AMR接入 · 电梯接入 · 门禁接入"]
+    end
 
-部署方式：本地部署
-通信方式：层间 gRPC + MQ 混用，各层直连左侧中间件
+    subgraph RIGHT["etcd"]
+        direction TB
+        ETCD[("etcd<br/>服务注册发现<br/>配置管理")]
+    end
+
+    subgraph OTHER["其他服务"]
+        direction TB
+        MAP["地图管理服务"]
+        EVENT["事件中心"]
+        LOG["日志回放"]
+    end
+
+    subgraph GP["全局规划层"]
+        direction TB
+        GPS["全局规划服务"]
+        GPA["全局规划算法"]
+        GPS --> GPA
+    end
+
+    subgraph PROTO["通信协议"]
+        direction LR
+        P1["MQTT"]
+        P2["TCP"]
+        P3["PLC"]
+        P4["OPC"]
+        P5["HTTP"]
+        P6["Modbus"]
+    end
+
+    subgraph DEVICES["设备层"]
+        direction LR
+        D1["AMR"]
+        D2["电梯"]
+        D3["门禁"]
+    end
+
+    CENTER -.- LEFT
+    CENTER -.- RIGHT
+
+    BIZ -->|HTTP RESTful API| ACC
+    ACC -->|gRPC+MQ| ORC
+    ORC -->|gRPC+MQ| ALL
+    ORC -->|gRPC| OTHER
+    ALL -->|gRPC+MQ| EXE
+    ALL -->|gRPC| GP
+    EXE -->|gRPC| GP
+    EXE -->|gRPC+MQ| DEV
+    DEV --> PROTO
+    PROTO --> DEVICES
