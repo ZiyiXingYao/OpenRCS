@@ -1,0 +1,69 @@
+%% RCS 平台架构设计
+%% 任务拆分/编排: Java | 任务分配/调度/路径规划/设备接入: C++
+
+graph TB
+    subgraph Upstream["上层业务层 (Java)"]
+        WMS["WMS / MES / ERP"]
+        API["API Gateway"]
+    end
+
+    subgraph TaskPlanning["任务规划层 (Java)"]
+        TMS["Task Management Service<br/>任务管理/生命周期"]
+        TOS["Task Orchestration Service<br/>任务拆分 + 任务编排"]
+    end
+
+    subgraph Middleware["通信中间件"]
+        MQ["Message Queue<br/>Kafka/RocketMQ"]
+        RPC["gRPC + Protobuf"]
+        REDIS[("Redis Cluster")]
+    end
+
+    subgraph Scheduling["核心调度层 (C++)"]
+        TAS["Task Allocation Service<br/>任务分配<br/>负载均衡/优先级/资源匹配"]
+        DDS["Device Dispatching Service<br/>设备调度<br/>状态机/冲突检测/交通管制"]
+        PPS["Path Planning Service<br/>路径规划<br/>全局路径/局部避障/动态重算"]
+    end
+
+    subgraph DeviceAccess["设备接入层 (C++)"]
+        DAG["Device Access Gateway<br/>协议适配/多机种兼容"]
+        AGV_ADP["AGV Adapter"]
+        AMR_ADP["AMR Adapter"]
+        ARM_ADP["ARM Adapter"]
+    end
+
+    subgraph Devices["设备层"]
+        AGV["AGV"]
+        AMR["AMR"]
+        ARM["机械臂"]
+    end
+
+    WMS --> API
+    API --> TMS
+    TMS --> TOS
+    TOS -->|子任务| MQ
+    MQ -->|消费| TAS
+    TAS -->|分配| RPC
+    RPC --> DDS
+    DDS -->|调度| PPS
+    PPS -->|路径+动作| DAG
+    DAG --> AGV_ADP
+    DAG --> AMR_ADP
+    DAG --> ARM_ADP
+    AGV_ADP --> AGV
+    AMR_ADP --> AMR
+    ARM_ADP --> ARM
+
+    AGV -->|状态上报| DAG
+    AMR -->|状态上报| DAG
+    ARM -->|状态上报| DAG
+    DAG -->|状态| MQ
+    MQ --> REDIS
+    TMS -.->|读状态| REDIS
+    TAS -.->|读状态| REDIS
+    DDS -.->|读状态| REDIS
+    PPS -.->|读地图| REDIS
+
+    style TaskPlanning fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
+    style Scheduling fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style DeviceAccess fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style Middleware fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
