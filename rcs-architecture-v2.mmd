@@ -1,74 +1,31 @@
-graph TB
-    subgraph Upstream["上层业务层 (Java)"]
-        WMS["WMS / MES / ERP"]
-        API["API Gateway<br/>REST / gRPC"]
-    end
+RCS调度平台架构（最终确认版）
+==============================
 
-    subgraph TaskPlanning["任务规划层 (Java)"]
-        TMS["Task Management Service<br/>任务生命周期 / CRUD / 状态机"]
-        TOS["Task Orchestration Service"]
-        Engine["自建工作流引擎<br/>可拖拽编排 · 状态持久化<br/>超时重试 · 补偿回滚"]
-        WEB["可视化编排器 (Web UI)<br/>现场人员拖拽配置流程"]
-    end
+左：中间件                 中：核心业务层（竖排6层 + 1独立服务）      右：设备
 
-    subgraph Middleware["通信中间件"]
-        RMQ["RocketMQ<br/>异步任务流 / 事件通知"]
-        GRPC["gRPC + Protobuf<br/>同步查询 / 指令下发"]
-        REDIS[("Redis Cluster<br/>设备状态缓存 · 分布式锁<br/>故障恢复快照 · 地图缓存")]
-    end
+RocketMQ     ←→  业务层：客户端 / WMS / MES / ERP
+MySQL                ↓ HTTP RESTful API
+Redis         ←→  业务接入层
+etcd                Nginx → Web Portal（客户页面）
+                             → API Gateway（第三方系统）
+                    ↓ gRPC + MQ 混用
+             ←→  任务编排层 (Java)
+                    任务编排引擎 ← 任务拆分执行服务（调用）
+                    ↓ gRPC + MQ 混用
+             ←→  任务分配层 (C++) ──┐
+                    任务分配服务      │
+                    任务分配算法 ← 调用 │  → 全局规划服务
+                    ↓ gRPC + MQ 混用 │
+             ←→  任务执行层 (C++) ──┘
+                    任务执行服务
+                    任务规划算法 ← 调用
+                    ↓ gRPC + MQ 混用
+             ←→  设备接入层
+                    AMR接入服务 ─ 协议插件1(VAD5050) / 协议插件2(大物流协议)
+                    电梯接入服务 ─ 协议插件1(三菱) / 协议插件2(日立)
+                    门禁接入服务 ─ 协议插件1(海康) / 协议插件2(大华)
+                    ↓
+                    AMR / 电梯 / 门禁
 
-    subgraph Scheduling["核心调度层 (C++)"]
-        TAS["Task Allocation Service<br/>任务分配 / 负载均衡 / 优先级"]
-        DDS["Device Dispatching Service<br/>设备调度 / 状态机 / 冲突检测 / 交通管制"]
-        PPS["Path Planning Service<br/>全局路径(A*/Dijkstra) / 局部避障 / 动态重算"]
-        MapSvc["Map Service (C++)<br/>版本管理 · 地图下发 · 基础查询 API"]
-    end
-
-    subgraph DeviceAccess["设备接入层 (C++)"]
-        DAG["Device Access Gateway (DAG)<br/>MQTT 协议适配 · 心跳保活 · 重连"]
-        AGV_ADP["AGV Adapter"]
-        AMR_ADP["AMR Adapter"]
-        ARM_ADP["ARM Adapter"]
-    end
-
-    subgraph Devices["设备层"]
-        DEV["AGV / AMR / ARM<br/>500+ 台 · 跨楼层"]
-    end
-
-    WMS -->|业务请求| API
-    API --> TMS
-    TMS -->|大任务| TOS
-    TOS --> Engine
-    WEB -->|定义工作流模板| Engine
-    Engine -->|持久化| DATABASE[("MySQL<br/>工作流状态")]
-    Engine -->|拆分子任务| RMQ
-
-    RMQ -->|消费| TAS
-    TAS -->|分配结果| GRPC
-    GRPC --> DDS
-    DDS -->|调度指令| PPS
-    PPS -->|路径+动作指令| DAG
-    PPS -.->|本地内存加载| MapSvc
-    DDS -.->|本地内存加载| MapSvc
-    TAS -.->|查询| MapSvc
-    MapSvc <-->|地图版本/缓存| REDIS
-
-    DAG -->|MQTT指令| DEV
-    DEV -->|MQTT状态上报 100ms| DAG
-    DAG -->|设备状态| RMQ
-    RMQ --> REDIS
-    TMS -.->|读状态| REDIS
-
-    subgraph FaultRecovery["故障恢复"]
-        FR_ENGINE["Java 层<br/>自建引擎数据库持久化<br/>重启自动恢复"]
-        FR_CPP["C++ 层<br/>Redis 快照持久化<br/>重启加载设备状态"]
-    end
-
-    Engine -.- FR_ENGINE
-    REDIS -.- FR_CPP
-
-    style TaskPlanning fill:#e1f5e1,stroke:#4caf50,stroke-width:2px
-    style Scheduling fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
-    style DeviceAccess fill:#fff3e0,stroke:#ff9800,stroke-width:2px
-    style Middleware fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
-    style FaultRecovery fill:#fce4ec,stroke:#e91e63,stroke-width:1px
+部署方式：本地部署
+通信方式：层间 gRPC + MQ 混用，各层直连左侧中间件
